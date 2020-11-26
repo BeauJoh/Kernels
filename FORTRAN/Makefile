@@ -29,8 +29,12 @@ ifeq ($(findstring ifort,$(FC)),ifort)
   ifeq ($(shell uname -s),Darwin)
     EXTRA = taskloop
   else
-    EXTRA = taskloop target coarray
+    EXTRA = taskloop coarray
   endif
+endif
+# OpenMP target stuff is only in IFX now
+ifeq ($(findstring ifx,$(FC)),ifx)
+  EXTRA = target
 endif
 # GCC (also matches pgfortran so PGI must come after)
 ifeq ($(findstring gfortran,$(FC)),gfortran)
@@ -62,7 +66,11 @@ tasks: p2p-tasks-openmp transpose-tasks-openmp
 
 taskloop: stencil-taskloop-openmp transpose-taskloop-openmp nstream-taskloop-openmp dgemm-taskloop-openmp
 
-coarray: p2p-coarray stencil-coarray transpose-coarray
+coarray: nstream-coarray p2p-coarray stencil-coarray transpose-coarray
+
+mpi: nstream-mpi
+
+mpi-openmp: nstream-mpi-openmp
 
 ga: nstream-ga transpose-ga dgemm-ga
 
@@ -97,6 +105,12 @@ dgemm-blas: dgemm-blas.F90
 %-ga: %-ga.F90
 	$(FC) $(FCFLAGS) $< $(GAFLAG) -o $@
 
+%-mpi-openmp: %-mpi.F90
+	$(MPIFORT) $(FCFLAGS) $(OPENMPFLAG) $< -o $@
+
+%-mpi: %-mpi.F90
+	$(MPIFORT) $(FCFLAGS) $< -o $@
+
 %-coarray: %-coarray.F90
 	$(CAFC) $(FCFLAGS) $< $(COARRAYFLAG) -o $@
 
@@ -120,6 +134,7 @@ clean:
 	-rm -f *-pretty
 	-rm -f *-blas
 	-rm -f *-coarray
+	-rm -f *-mpi
 	-rm -f *-ga
 	-rm -f *-openmp
 	-rm -f *-target

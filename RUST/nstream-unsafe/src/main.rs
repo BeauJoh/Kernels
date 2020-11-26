@@ -1,5 +1,6 @@
 ///
-/// Copyright (c) 2019, Intel Corporation
+/// Copyright (c) 2020, Intel Corporation
+/// Copyright (c) 2020, Thomas Hayward-Schneider
 ///
 /// Redistribution and use in source and binary forms, with or without
 /// modification, are permitted provided that the following conditions
@@ -39,10 +40,10 @@
 ///          a third vector.
 ///
 /// USAGE:   The program takes as input the number
-///          of iterations to loop over the triad vectors and
-///          the length of the vectors.
+///          of iterations to loop over the triad vectors, the length of the
+///          vectors, and the offset between vectors
 ///
-///          <progname> <# iterations> <vector length>
+///          <progname> <# iterations> <vector length> <offset>
 ///
 ///          The output consists of diagnostics to make sure the
 ///          algorithm worked, and of timing statistics.
@@ -52,129 +53,125 @@
 ///          by the execution time. For a vector length of N, the total
 ///          number of words read and written is 4*N*sizeof(double).
 ///
-///
 /// HISTORY: This code is loosely based on the Stream benchmark by John
 ///          McCalpin, but does not follow all the Stream rules. Hence,
 ///          reported results should not be associated with Stream in
 ///          external publications
 ///
 ///          Converted to C++11 by Jeff Hammond, November 2017.
-///          Converted to C11 by Jeff Hammond, February 2019.
 ///
 //////////////////////////////////////////////////////////////////////
 
-#pragma omp requires unified_address
+use std::env;
+use std::mem;
+//use std::num; // abs?
+use std::time::{Instant,Duration};
 
-#include "prk_util.h"
-#include "prk_openmp.h"
+fn help() {
+  println!("Usage: <# iterations> <vector length>");
+}
 
-int main(int argc, char * argv[])
+fn main()
 {
-  printf("Parallel Research Kernels version %d\n", PRKVERSION );
-  printf("C11/OpenMP TARGET STREAM triad: A = B + scalar * C\n");
+  println!("Parallel Research Kernels");
+  println!("Rust STREAM triad: A = B + scalar * C");
 
   //////////////////////////////////////////////////////////////////////
-  /// Read and test input parameters
+  // Read and test input parameters
   //////////////////////////////////////////////////////////////////////
 
-  if (argc < 3) {
-    printf("Usage: <# iterations> <vector length>\n");
-    return 1;
+  let args : Vec<String> = env::args().collect();
+
+  let iterations : u32;
+  let length     : usize;
+
+  match args.len() {
+    3 => {
+      iterations = match args[1].parse() {
+        Ok(n) => { n },
+        Err(_) => { help(); return; },
+      };
+      length = match args[2].parse() {
+        Ok(n) => { n },
+        Err(_) => { help(); return; },
+      };
+    },
+    _ => {
+      help();
+      return;
+    }
   }
 
-  int iterations = atoi(argv[1]);
-  if (iterations < 1) {
-    printf("ERROR: iterations must be >= 1\n");
-    return 1;
+  if iterations < 1 {
+    println!("ERROR: iterations must be >= 1");
   }
 
-  // length of a the vector
-  size_t length = atol(argv[2]);
-  if (length <= 0) {
-    printf("ERROR: Vector length must be greater than 0\n");
-    return 1;
-  }
-
-  int device = (argc > 3) ? atol(argv[3]) : omp_get_initial_device();
-  if ( (device < 0 || omp_get_num_devices() <= device ) && (device != omp_get_initial_device()) ) {
-    printf("ERROR: device number %d is not valid.\n", device);
-    return 1;
-  }
-
-  printf("Number of iterations = %d\n", iterations);
-  printf("Vector length        = %zu\n", length);
-  printf("OpenMP Device        = %d\n", device);
+  println!("Number of iterations  = {}", iterations);
+  println!("vector length         = {}", length);
 
   //////////////////////////////////////////////////////////////////////
   // Allocate space and perform the computation
   //////////////////////////////////////////////////////////////////////
 
-  double nstream_time = 0.0;
+  let mut a : Vec<f64> = vec![0.0; length];
+  let b : Vec<f64> = vec![2.0; length];
+  let c : Vec<f64> = vec![2.0; length];
 
-  size_t bytes = length*sizeof(double);
-  double * restrict A = omp_target_alloc(bytes, device);
-  double * restrict B = omp_target_alloc(bytes, device);
-  double * restrict C = omp_target_alloc(bytes, device);
+  let timer = Instant::now();
+  let mut t0 : Duration = timer.elapsed();
 
-  double scalar = 3.0;
+  let scalar : f64 = 3.0;
 
-  #pragma omp target teams distribute parallel for simd schedule(static) device(device) is_device_ptr(A,B,C)
-  for (size_t i=0; i<length; i++) {
-      A[i] = 0.0;
-      B[i] = 2.0;
-      C[i] = 2.0;
-  }
+  for _k in 0..iterations+1 {
 
-  {
-    for (int iter = 0; iter<=iterations; iter++) {
+    if _k == 1 { t0 = timer.elapsed(); }
 
-      if (iter==1) nstream_time = omp_get_wtime();
-
-      #pragma omp target teams distribute parallel for simd schedule(static) device(device) is_device_ptr(A,B,C)
-      for (size_t i=0; i<length; i++) {
-          A[i] += B[i] + scalar * C[i];
+    for i in 0..length {
+      unsafe {
+        *a.get_unchecked_mut(i) += *b.get_unchecked(i) + scalar * *c.get_unchecked(i);
       }
     }
-    nstream_time = omp_get_wtime() - nstream_time;
+
   }
-
-  omp_target_free(C, device);
-  omp_target_free(B, device);
+  let t1 = timer.elapsed();
+  let dt = (t1.checked_sub(t0)).unwrap();
+  let dtt : u64 = dt.as_secs() * 1_000_000_000 + dt.subsec_nanos() as u64;
+  let nstream_time : f64 = dtt as f64 * 1.0e-9;
 
   //////////////////////////////////////////////////////////////////////
-  /// Analyze and output results
+  // Analyze and output results
   //////////////////////////////////////////////////////////////////////
 
-  double ar = 0.0;
-  double br = 2.0;
-  double cr = 2.0;
-  for (int i=0; i<=iterations; i++) {
+  let mut ar : f64 = 0.0;
+  let br : f64 = 2.0;
+  let cr : f64 = 2.0;
+  for _k in 0..iterations+1 {
       ar += br + scalar * cr;
   }
 
-  ar *= length;
+  ar *= length as f64;
 
-  double asum = 0.0;
-  #pragma omp target teams distribute parallel for reduction(+:asum) device(device) is_device_ptr(A)
-  for (size_t i=0; i<length; i++) {
-      asum += fabs(A[i]);
+  let mut asum = 0.0;
+  for i in 0..length {
+      let absa : f64 = a[i].abs();
+      asum += absa;
   }
 
-  omp_target_free(A, device);
-
-  double epsilon=1.e-8;
-  if (fabs(ar-asum)/asum > epsilon) {
-      printf("Failed Validation on output array\n"
-             "       Expected checksum: %lf\n"
-             "       Observed checksum: %lf\n"
-             "ERROR: solution did not validate\n", ar, asum);
-      return 1;
+  let err : f64 = (ar-asum)/asum;
+  let abserr : f64 = err.abs();
+  let epsilon : f64 = 1.0e-8;
+  if abserr < epsilon {
+    println!("Solution validates");
+    let avgtime : f64 = (nstream_time as f64) / (iterations as f64);
+    let nbytes : usize = 4 * length * mem::size_of::<f64>();
+    println!("Rate (MB/s): {:10.3} Avg time (s): {:10.3}", (1.0e-6_f64) * (nbytes as f64) / avgtime, avgtime);
   } else {
-      printf("Solution validates\n");
-      double avgtime = nstream_time/iterations;
-      double nbytes = 4.0 * length * sizeof(double);
-      printf("Rate (MB/s): %lf Avg time (s): %lf\n", 1.e-6*nbytes/avgtime, avgtime);
+    println!("Failed Validation on output array");
+    println!("       Expected checksum: {}", ar);
+    println!("       Observed checksum: {}", asum);
+    println!("ERROR: solution did not validate");
   }
-
-  return 0;
+  return;
 }
+
+

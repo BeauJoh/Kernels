@@ -75,115 +75,128 @@ program main
   use iso_fortran_env
   implicit none
   real(kind=REAL64) :: prk_get_wtime
+  integer :: me, np, p
   ! for argument parsing
   integer :: err
   integer :: arglen
   character(len=32) :: argtmp
   ! problem definition
-  integer(kind=INT32) ::  iterations, offset
+  integer(kind=INT32) ::  iterations
   integer(kind=INT64) ::  length
-  real(kind=REAL64), allocatable ::  A(:)
-  real(kind=REAL64), allocatable ::  B(:)
-  real(kind=REAL64), allocatable ::  C(:)
+  integer(kind=INT32) ::  co_iterations[*]
+  integer(kind=INT64) ::  co_length[*]
+  real(kind=REAL64), allocatable ::  A(:)[:]
+  real(kind=REAL64), allocatable ::  B(:)[:]
+  real(kind=REAL64), allocatable ::  C(:)[:]
   real(kind=REAL64) :: scalar
   integer(kind=INT64) :: bytes
   ! runtime variables
   integer(kind=INT64) :: i
   integer(kind=INT32) :: k
   real(kind=REAL64) ::  asum, ar, br, cr
+  real(kind=REAL64) ::  co_asum[*]
   real(kind=REAL64) ::  t0, t1, nstream_time, avgtime
   real(kind=REAL64), parameter ::  epsilon=1.D-8
+
+  me = this_image()
+  np = num_images()
 
   ! ********************************************************************
   ! read and test input parameters
   ! ********************************************************************
 
-  write(*,'(a25)') 'Parallel Research Kernels'
-  write(*,'(a47)') 'Fortran OpenACC STREAM triad: A = B + scalar * C'
+  if (me.eq.1) then
+    write(*,'(a25)') 'Parallel Research Kernels'
+    write(*,'(a48)') 'Fortran coarray STREAM triad: A = B + scalar * C'
 
-  if (command_argument_count().lt.2) then
-    write(*,'(a17,i1)') 'argument count = ', command_argument_count()
-    write(*,'(a62)')    'Usage: ./transpose <# iterations> <vector length> [<offset>]'
-    stop 1
-  endif
-
-  iterations = 1
-  call get_command_argument(1,argtmp,arglen,err)
-  if (err.eq.0) read(argtmp,'(i32)') iterations
-  if (iterations .lt. 1) then
-    write(*,'(a,i5)') 'ERROR: iterations must be >= 1 : ', iterations
-    stop 1
-  endif
-
-  length = 1
-  call get_command_argument(2,argtmp,arglen,err)
-  if (err.eq.0) read(argtmp,'(i32)') length
-  if (length .lt. 1) then
-    write(*,'(a,i5)') 'ERROR: length must be nonnegative : ', length
-    stop 1
-  endif
-
-  offset = 0
-  if (command_argument_count().gt.2) then
-    call get_command_argument(3,argtmp,arglen,err)
-    if (err.eq.0) read(argtmp,'(i32)') offset
-    if (offset .lt. 0) then
-      write(*,'(a,i5)') 'ERROR: offset must be positive : ', offset
-      stop 1
+    if (command_argument_count().lt.2) then
+      write(*,'(a17,i1)') 'argument count = ', command_argument_count()
+      write(*,'(a49)')    'Usage: ./transpose <# iterations> <vector length>'
+      error stop 1
     endif
+
+    iterations = 1
+    call get_command_argument(1,argtmp,arglen,err)
+    if (err.eq.0) read(argtmp,'(i32)') iterations
+    if (iterations .lt. 1) then
+      write(*,'(a,i5)') 'ERROR: iterations must be >= 1 : ', iterations
+      error stop 1
+    endif
+
+    length = 1
+    call get_command_argument(2,argtmp,arglen,err)
+    if (err.eq.0) read(argtmp,'(i32)') length
+    if (length .lt. 1) then
+      write(*,'(a,i5)') 'ERROR: length must be nonnegative : ', length
+      error stop 1
+    endif
+
+    write(*,'(a,i12)')  'Number of images     = ', np
+    write(*,'(a,i12)')  'Number of iterations = ', iterations
+    write(*,'(a,i12)')  'Vector length        = ', length
   endif
 
-  write(*,'(a,i12)') 'Number of iterations = ', iterations
-  write(*,'(a,i12)') 'Vector length        = ', length
-  write(*,'(a,i12)') 'Offset               = ', offset
+  if (me.eq.1) then
+    ! co_broadcast is 2018 and not available in all coarray implementations
+    do p=1,np
+      co_iterations[p] = iterations
+      co_length[p]     = length
+    enddo
+  endif
+  sync all
+  if (me.ne.1) then
+    ! copy broadcast inputs to local variables
+    iterations = co_iterations[this_image()]
+    length     = co_length[this_image()]
+  endif
 
   ! ********************************************************************
   ! ** Allocate space for the input and transpose matrix
   ! ********************************************************************
 
-  allocate( A(length), stat=err)
+  allocate( A(length)[*], stat=err)
   if (err .ne. 0) then
     write(*,'(a,i3)') 'allocation of A returned ',err
-    stop 1
+    error stop 1
   endif
 
-  allocate( B(length), stat=err )
+  allocate( B(length)[*], stat=err )
   if (err .ne. 0) then
     write(*,'(a,i3)') 'allocation of B returned ',err
-    stop 1
+    error stop 1
   endif
 
-  allocate( C(length), stat=err )
+  allocate( C(length)[*], stat=err )
   if (err .ne. 0) then
     write(*,'(a,i3)') 'allocation of C returned ',err
-    stop 1
+    error stop 1
   endif
 
   scalar = 3
 
   t0 = 0
 
-  !$acc parallel loop gang
-  do i=1,length
+  do concurrent (i=1:length)
     A(i) = 0
     B(i) = 2
     C(i) = 2
   enddo
+  sync all ! barrier to ensure initialization is finished at all PEs
 
-  !$acc data pcopy(A) pcopyin(B,C)
   do k=0,iterations
 
-    if (k.eq.1) t0 = prk_get_wtime()
+    if (k.eq.1) then
+      sync all ! barrier
+      t0 = prk_get_wtime()
+    endif
 
-    !$acc parallel loop gang
-    do i=1,length
+    do concurrent (i=1:length)
       A(i) = A(i) + B(i) + scalar * C(i)
     enddo
   enddo ! iterations
 
+  sync all
   t1 = prk_get_wtime()
-
-  !$acc end data
 
   nstream_time = t1 - t0
 
@@ -199,30 +212,44 @@ program main
   enddo
 
   ar = ar * length
+  ar = ar * np
 
   asum = 0
-  !$acc parallel loop reduction(+:asum)
-  do i=1,length
+  do concurrent (i=1:length)
     asum = asum + abs(A(i))
   enddo
+
+  ! reduction via gather
+  co_asum[me] = asum
+  sync all
+  asum = 0
+  if (me.eq.1) then
+    do p=1,np
+      asum = asum + co_asum[p]
+    enddo
+  endif
 
   deallocate( C )
   deallocate( B )
   deallocate( A )
 
   if (abs(asum-ar) .gt. epsilon) then
-    write(*,'(a35)') 'Failed Validation on output array'
-    write(*,'(a30,f30.15)') '       Expected checksum: ', ar
-    write(*,'(a30,f30.15)') '       Observed checksum: ', asum
-    write(*,'(a35)')  'ERROR: solution did not validate'
-    stop 1
+    if (me.eq.1) then
+      write(*,'(a35)') 'Failed Validation on output array'
+      write(*,'(a30,f30.15)') '       Expected checksum: ', ar
+      write(*,'(a30,f30.15)') '       Observed checksum: ', asum
+      write(*,'(a35)')  'ERROR: solution did not validate'
+      error stop 1
+    endif
   else
-    write(*,'(a17)') 'Solution validates'
+    if (me.eq.1) write(*,'(a17)') 'Solution validates'
     avgtime = nstream_time/iterations;
-    bytes = 4 * int(length,INT64) * storage_size(A)/8
-    write(*,'(a12,f15.3,1x,a12,e15.6)')    &
-        'Rate (MB/s): ', 1.d-6*bytes/avgtime, &
-        'Avg time (s): ', avgtime
+    bytes = 4 * np * length * storage_size(A)/8
+    if (me.eq.1) then
+      write(*,'(a12,f15.3,1x,a12,e15.6)')    &
+              'Rate (MB/s): ', 1.d-6*bytes/avgtime, &
+              'Avg time (s): ', avgtime
+    endif
   endif
 
 end program main

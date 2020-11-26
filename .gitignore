@@ -250,8 +250,11 @@ FORTRAN/dgemm-openmp-target
 FORTRAN/dgemm-pretty
 FORTRAN/dgemm-taskloop-openmp
 FORTRAN/nstream
+FORTRAN/nstream-coarray
 FORTRAN/nstream-ga
 FORTRAN/nstream-openmp
+FORTRAN/nstream-mpi
+FORTRAN/nstream-mpi-openmp
 FORTRAN/nstream-openmp-target
 FORTRAN/nstream-ornlacc
 FORTRAN/nstream-pretty
@@ -328,6 +331,10 @@ OPENMP/Synch_p2p/p2p
 OPENMP/Transpose/transpose
 RUST/nstream/Cargo.lock
 RUST/nstream/target/
+RUST/nstream-unsafe/Cargo.lock
+RUST/nstream-unsafe/target/
+RUST/nstream-iter/Cargo.lock
+RUST/nstream-iter/target/
 RUST/p2p/Cargo.lock
 RUST/p2p/target/
 RUST/stencil/Cargo.lock

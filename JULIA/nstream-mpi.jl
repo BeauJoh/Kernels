@@ -62,6 +62,7 @@
 #
 # *******************************************************************
 
+import MPI
 
 # ********************************************************************
 # read and test input parameters
@@ -90,10 +91,19 @@ function do_norm(A, N)
 end
 
 function main()
-    println("Parallel Research Kernels version")
-    println("Julia STREAM triad: A = B + scalar * C")
 
-    if length(ARGS) != 2
+    MPI.Init()
+    comm = MPI.COMM_WORLD
+    me = MPI.Comm_rank(comm)
+    np = MPI.Comm_size(comm)
+    print = (me == 0)
+
+    if (me == 0)
+        println("Parallel Research Kernels version")
+        println("Julia STREAM triad: A = B + scalar * C")
+    end
+
+    if length(ARGS) != 2 && print
         println("argument count = ", length(ARGS))
         println("Usage: ./nstream <# iterations> <vector length>")
         exit(1)
@@ -115,8 +125,11 @@ function main()
         exit(3)
     end
 
-    println("Number of iterations     = ", iterations)
-    println("Vector length            = ", vlength)
+    if (me == 0)
+        println("Number of processes      = ", np)
+        println("Number of iterations     = ", iterations)
+        println("Vector length            = ", vlength)
+    end
 
     # ********************************************************************
     # ** Allocate space for the input and transpose matrix
@@ -137,11 +150,13 @@ function main()
 
     for k in 0:iterations
         if k==0
+            MPI.Barrier(comm)
             t0 = time_ns()
         end
         do_nstream(A, B, C, scalar, vlength)
     end
 
+    MPI.Barrier(comm)
     t1 = time_ns()
     nstream_time = (t1 - t0) * 1.e-9
 
@@ -163,15 +178,19 @@ function main()
 
     epsilon = 1.e-8
     if abs(ar-asum)/asum < epsilon
-        println("Solution validates")
-        avgtime = nstream_time/iterations
-        nbytes = 4.0 * vlength * sizeof(Float64)
-        println("Rate (MB/s): ",1.e-6*nbytes/avgtime, " Avg time (s): ", avgtime)
+        if (me == 0)
+            println("Solution validates")
+            avgtime = nstream_time/iterations
+            nbytes = 4.0 * np * vlength * sizeof(Float64)
+            println("Rate (MB/s): ",1.e-6*nbytes/avgtime, " Avg time (s): ", avgtime)
+        end
     else
-        println("Failed Validation on output array");
-        println("        Expected checksum: ",ar);
-        println("        Observed checksum: ",asum);
-        println("ERROR: solution did not validate")
+        if (me == 0)
+            println("Failed Validation on output array");
+            println("        Expected checksum: ",ar);
+            println("        Observed checksum: ",asum);
+            println("ERROR: solution did not validate")
+        end
         exit(1)
     end
 end
